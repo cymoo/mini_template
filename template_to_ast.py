@@ -1,21 +1,6 @@
 import re
 
 
-# Utils
-
-
-def html_escape(s):
-    """ Escape HTML special characters ``&<>`` and quotes ``'"``. """
-    return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;') \
-        .replace('"', '&quot;').replace("'", '&#039;')
-
-
-def html_unescape(s):
-    """Unescape HTML special characters."""
-    return str(s).replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>') \
-        .replace('&quot;', '"').replace('&#039;', "'")
-
-
 class TemplateError(Exception):
     pass
 
@@ -29,3 +14,25 @@ class TemplateContextError(TemplateError):
 
 
 TOKEN_PATTERN = re.compile(r'({{.*?}}|{%.*?%}|{#.*?#})')
+
+
+class Compiler:
+    def __init__(self, text: str, ctx: dict) -> None:
+        pass
+
+    def render(self, ctx) -> str:
+        pass
+
+
+class Template:
+    global_context = {}
+
+    def __init__(self, text: str) -> None:
+        self.compiler = Compiler(text, self.global_context)
+
+    @classmethod
+    def update_global_context(cls, ctx: dict) -> None:
+        cls.global_context.update(ctx)
+
+    def render(self, **ctx) -> str:
+        return self.compiler.render(ctx)

@@ -1,8 +1,12 @@
 from collections import abc
 from keyword import iskeyword
-from typing import Any, Mapping, Iterable, Iterator
-import re
-from pprint import pprint
+
+
+__all__ = [
+    'DotSon',
+    'html_escape',
+    'html_unescape',
+]
 
 
 class DotSon(abc.Mapping):
@@ -17,7 +21,7 @@ class DotSon(abc.Mapping):
     True
     """
 
-    def __new__(cls, obj: Any) -> Any:
+    def __new__(cls, obj):
         if isinstance(obj, abc.Mapping):
             return super().__new__(cls)
         elif isinstance(obj, abc.MutableSequence):
@@ -26,7 +30,7 @@ class DotSon(abc.Mapping):
         else:
             return obj
 
-    def __init__(self, mapping: Mapping):
+    def __init__(self, mapping):
         # create a shallow copy for security
         self._data = {}
         for key, value in mapping.items():
@@ -36,7 +40,7 @@ class DotSon(abc.Mapping):
                 key += '_'
             self._data[key] = value
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str):
         if hasattr(self._data, name):
             return getattr(self._data, name)
         try:
@@ -44,27 +48,38 @@ class DotSon(abc.Mapping):
         except KeyError:
             raise AttributeError('{!r} has no attribute {!r}'.format(self, name))
 
-    def __getitem__(self, item: str) -> Any:
+    def __getitem__(self, item):
         return self._data[item]
 
-    def keys(self) -> Iterable:
+    def keys(self):
         return self._data.keys()
 
-    def values(self) -> Iterable:
+    def values(self):
         return self._data.values()
 
-    def items(self) -> Iterable:
+    def items(self):
         return self._data.items()
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key, default=None):
         return self._data.get(key, default)
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self._data)
 
-    def __iter__(self) -> Iterator:
+    def __iter__(self):
         return iter(self._data)
 
-    def __str__(self) -> str:
+    def __str__(self):
         return str(self._data)
 
+
+def html_escape(s):
+    """ Escape HTML special characters ``&<>`` and quotes ``'"``. """
+    return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;') \
+        .replace('"', '&quot;').replace("'", '&#039;')
+
+
+def html_unescape(s):
+    """Unescape HTML special characters."""
+    return str(s).replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>') \
+        .replace('&quot;', '"').replace('&#039;', "'")
