@@ -106,34 +106,3 @@ class Template:
         code.dedent()
 
         return code
-
-
-if __name__ == '__main__':
-    html = """
-<html>
-    <head><title>hello</title></head>
-    <body>
-        <h1>hello, {% if user %}{{ user }}{% else %}{{ 'guest' }}{% endif %}</h1>
-        <h2>{{post}}</h2>
-        <ul>
-        {% for plan in plans %}
-            <li>{{ plan.topic }} --- {{ plan.date }}</li>
-        {% endfor %}
-        </ul>
-        {% if True %}{{ 'foo' }}{% endif %}
-    </body>
-</html>""".strip()
-
-    template = Template()
-    context1 = {
-        'user': 'jie',
-        'books': ['CSAPP', 'APUE', 'SICP'],
-        'plans': [
-            {'topic': 'marry', 'date': '2021-10-01'},
-            {'topic': 'house', 'date': '2021-10-01'},
-            {'topic': 'career', 'date': '2021-06-01'},
-        ],
-        'post': "<p>hello world</p>"
-    }
-    result = template.render(html, **context1)
-    print(result)

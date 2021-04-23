@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>mini template</title>
+</head>
+<body>
+    <h1>hello, {{ user }}</h1>
+
+    {% if msg %}
+    <p>{{ msg }}</p>
+    {% end %}
+
+    <ul>
+    {% for book in books %}
+        <li>{{ book.rank }}: {{ book.title }}</li>
+    {% end %}
+    </ul>
+</body>
+</html>
