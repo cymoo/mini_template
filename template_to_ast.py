@@ -1,5 +1,6 @@
 from pprint import pprint
-from typing import List
+from typing import List, Any
+from collections import ChainMap, namedtuple
 
 
 class TemplateError(Exception):
@@ -18,14 +19,32 @@ class Node:
     def __init__(self):
         pass
 
-    def before_render(self):
-        pass
-
     def render(self, ctx: dict) -> str:
         raise NotImplementedError
 
-    def after_render(self):
-        pass
+    def eval_expr(self, expr: str, ctx: dict) -> Any:
+        if '|' in expr:
+            ep, *pipes = expr.split('|')
+            value = self.eval_expr(ep.strip(), ctx)
+            for pipe in map(str.strip, pipes):
+                func = ctx.get(pipe)
+                if not func:
+                    raise TemplateSyntaxError(f'Missing pipe function: {pipe}')
+                value = func(value)
+            return value
+        elif '.' in expr:
+            ep, *attrs = expr.split('.')
+            value = ctx.get(ep)
+            if not value:
+                raise TemplateSyntaxError(f'Missing key: {ep}')
+            for attr in attrs:
+                try:
+                    value = getattr(value, attr)
+                except AttributeError:
+                    value = value[attr]
+            return value
+        else:
+            return ctx.get(expr)
 
 
 class RootNode(Node):
@@ -38,15 +57,15 @@ class RootNode(Node):
 
 
 class TextNode(Node):
-    def __init__(self, value: str) -> None:
+    def __init__(self, text: str) -> None:
         super().__init__()
-        self.value = value
+        self.text = text
 
     def render(self, ctx: dict) -> str:
-        return self.value
+        return self.text
 
     def __repr__(self):
-        return '<{}: {!r}>'.format(self.__class__.__name__, self.value[0:min(20, len(self.value))] + '...')
+        return '<{}: {!r}>'.format(self.__class__.__name__, self.text[0:min(20, len(self.text))] + '...')
 
 
 class CommentNode(Node):
@@ -58,16 +77,13 @@ class CommentNode(Node):
         return ''
 
 
-class ExprNode(Node):
+class ExpressionNode(Node):
     def __init__(self, expr: str) -> None:
         super().__init__()
         self.expr = expr
 
     def render(self, ctx: dict) -> str:
-        return str(eval(self.expr))
-
-    def eval_expr(self):
-        pass
+        return str(self.eval_expr(self.expr, ctx))
 
     def __repr__(self) -> str:
         return '<{}: {}>'.format(self.__class__.__name__, self.expr)
@@ -80,10 +96,26 @@ class BlockNode(Node):
         self.children = children
 
     def render(self, ctx: dict) -> str:
-        return ''
+        raise NotImplementedError
 
     def __repr__(self):
         return '<{}: {}>'.format(self.__class__.__name__, self.statement)
+
+
+class ForNode(BlockNode):
+    Loop = namedtuple('Loop', ['length', 'index0', 'index', 'first', 'last'])
+
+    def render(self, ctx: dict) -> str:
+        _, var_name, _, expr = self.statement.split()
+        values = self.eval_expr(expr, ctx)
+        length = len(values)
+
+        output = []
+        for idx, value in enumerate(values):
+            loop = self.Loop(length, idx, idx + 1, idx == 0, idx == length - 1)
+            new_ctx = ChainMap({'loop': loop, var_name: value})
+            output.append(''.join(child.render(new_ctx) for child in self.children))
+        return ''.join(output)
 
 
 class IfNode(BlockNode):
@@ -95,10 +127,6 @@ class ElifNode(BlockNode):
 
 
 class ElseNode(BlockNode):
-    pass
-
-
-class ForNode(BlockNode):
     pass
 
 
@@ -144,8 +172,7 @@ class TextReader:
 
 
 def parse(reader: TextReader, in_block=None) -> List[Node]:
-    # body = _ChunkList([])
-    children = []
+    children: List[Node] = []
     while True:
         # Find next template directive
         curly = 0
@@ -155,9 +182,7 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
                 # EOF
                 if in_block:
                     raise TemplateSyntaxError("Missing {%% end %%} block for %s" % in_block)
-                # body.chunks.append(_Text(reader.consume()))
                 children.append(TextNode(reader.consume()))
-                # return body
                 return children
             # If the first curly brace is not the start of a special token,
             # start searching from the character after it
@@ -175,7 +200,6 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
 
         # Append any text before the special token
         if curly > 0:
-            # body.chunks.append(_Text(reader.consume(curly)))
             children.append(TextNode(reader.consume(curly)))
 
         start_brace = reader.consume(2)
@@ -184,43 +208,45 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
         if start_brace == "{{":
             end = reader.find("}}")
             if end == -1 or reader.find("\n", 0, end) != -1:
-                raise TemplateSyntaxError("Missing end expression }}")
+                raise TemplateSyntaxError("Missing end tag for expression }}")
             contents = reader.consume(end).strip()
             reader.consume(2)
             if not contents:
                 raise TemplateSyntaxError("Empty expression")
-            # body.chunks.append(_Expression(contents))
-            children.append(ExprNode(contents))
-            continue
-
+            children.append(ExpressionNode(contents))
         # Comment
-        # ...
-
+        elif start_brace == "{#":
+            end = reader.find("#}")
+            if end == -1 or reader.find("\n", 0, end) != -1:
+                raise TemplateSyntaxError("Missing end tag for comment }}")
+            contents = reader.consume(end).strip()
+            reader.consume(2)
+            children.append(CommentNode(contents))
         # Block
-        assert start_brace == "{%", start_brace
-        end = reader.find("%}")
-        if end == -1 or reader.find("\n", 0, end) != -1:
-            raise TemplateSyntaxError("Missing end block %}")
-        contents = reader.consume(end).strip()
-        reader.consume(2)
-        if not contents:
-            raise TemplateSyntaxError("Empty block tag ({% %})")
-        operator, space, suffix = contents.partition(" ")
-        # End tag
-        # if operator == "end":
-        if operator.startswith("end"):
-            if not in_block:
-                raise TemplateSyntaxError("Extra {% end %} block")
-            return children
-        elif operator in ("try", "if", 'elif', 'else', "for", "while"):
-            # parse inner body recursively
-            block_body = parse(reader, operator)
-            block = BlockNode(contents, block_body)
-            # body.chunks.append(block)
-            children.append(block)
-            # continue
-        else:
-            raise TemplateSyntaxError("unknown operator: %r" % operator)
+        elif start_brace == "{%":
+            end = reader.find("%}")
+            if end == -1 or reader.find("\n", 0, end) != -1:
+                raise TemplateSyntaxError("Missing end tag for block %}")
+            contents = reader.consume(end).strip()
+            reader.consume(2)
+            if not contents:
+                raise TemplateSyntaxError("Empty block tag ({% %})")
+            operator, space, suffix = contents.partition(" ")
+            # End tag
+            if operator.startswith("end"):
+                if not in_block:
+                    raise TemplateSyntaxError("Extra {% end %} block")
+                return children
+            elif operator in ("if", 'elif', 'else', "for",):
+                # parse inner body recursively
+                block_body = parse(reader, operator)
+                if operator == 'for':
+                    block = ForNode(contents, block_body)
+                else:
+                    block = BlockNode(contents, block_body)
+                children.append(block)
+            else:
+                raise TemplateSyntaxError("Unknown operator: %r" % operator)
 
 
 class Template:
@@ -228,12 +254,24 @@ class Template:
         self.options = options
 
     def render(self, text: str, **ctx):
-        pass
+        root = RootNode(parse(TextReader(text)))
+        pprint(root.children)
+        return root.render(ctx)
 
 
 if __name__ == '__main__':
     with open('./example1.html', 'rt') as fp:
         content = fp.read()
 
-    result = RootNode(parse(TextReader(content)))
-    pprint(result.children)
+    context = {
+        'user': 'neo',
+        'msg': 'Keep calm and carry on!',
+        'books': [
+            {'rank': 1, 'title': 'APUE'},
+            {'rank': 2, 'title': 'CSAPP'},
+            {'rank': 3, 'title': 'SICP'},
+            {'rank': 4, 'title': 'UNP'},
+        ]
+    }
+    template = Template()
+    print(template.render(content, **context))
