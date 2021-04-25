@@ -13,10 +13,15 @@
     <p>Writing a template is fun!</p>
     {% end %}
 
+    <p>{{ 13.0 }}</p>
+
     {# this is a comment #}
     <ul>
     {% for book in books %}
-        <li>{{ loop.index }}: {{ book.title }}</li>
+        <li>
+            {% if book.rank == 1 %}<span>WOW!</span>{% end %}
+            <span>{{ book.rank }}: {{ book.title }}</span>
+        </li>
     {% end %}
     </ul>
 </body>

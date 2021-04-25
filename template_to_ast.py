@@ -3,6 +3,8 @@
 from pprint import pprint
 from typing import List, Any, Optional
 from collections import ChainMap, namedtuple
+from operator import eq, ne
+from string import digits
 
 
 class TemplateError(Exception):
@@ -10,38 +12,56 @@ class TemplateError(Exception):
 
 
 class TemplateSyntaxError(TemplateError):
-    """Exception of bad template syntax"""
+    """Exception for bad template syntax"""
 
 
 class TemplateContextError(TemplateError):
-    """Exception about template context """
+    """Exception about template context"""
 
 
 class Node:
-    def __init__(self):
+    def __init__(self) -> None:
         self.children = None
 
     def render(self, ctx: dict) -> str:
         raise NotImplementedError
 
     def render_children(self, ctx: dict, children: Optional[List['Node']] = None) -> str:
-        return ''.join(child.render(ctx) for child in (children or self.children or []))
+        if children is None:
+            children = self.children
+        return ''.join(child.render(ctx) for child in children)
 
     def eval_expr(self, expr: str, ctx: dict) -> Any:
+        expr = expr.strip()
+
+        # If an expression begins with digits, convert it to int or float.
+        if expr[0] in digits:
+            try:
+                if '.' in expr:
+                    return float(expr)
+                else:
+                    return int(expr)
+            except ValueError:
+                raise TemplateSyntaxError(f'Cannot resolve: "{expr}"')
+
+        # If an expression begins with ' or ", it should be a str.
+        if expr[0] in ('"', "'"):
+            return expr[1:-1]
+
         if '|' in expr:
             ep, *pipes = expr.split('|')
-            value = self.eval_expr(ep.strip(), ctx)
+            value = self.eval_expr(ep, ctx)
             for pipe in map(str.strip, pipes):
                 func = ctx.get(pipe)
                 if not func:
-                    raise TemplateSyntaxError(f'Missing pipe function: {pipe}')
+                    raise TemplateContextError(f'Missing pipe function: {pipe}')
                 value = func(value)
             return value
         elif '.' in expr:
             ep, *attrs = expr.split('.')
             value = ctx.get(ep)
             if not value:
-                raise TemplateSyntaxError(f'Cannot resolve: "{ep}"')
+                raise TemplateContextError(f'Cannot resolve: "{ep}"')
             for attr in attrs:
                 try:
                     value = getattr(value, attr)
@@ -49,7 +69,7 @@ class Node:
                     value = value[attr]
             return value
         else:
-            return ctx.get(expr)
+            return ctx[expr]
 
 
 class RootNode(Node):
@@ -69,9 +89,6 @@ class TextNode(Node):
     def render(self, ctx: dict) -> str:
         return self.text
 
-    def __repr__(self):
-        return '<{}: {!r}>'.format(self.__class__.__name__, self.text[0:min(20, len(self.text))] + '...')
-
 
 class CommentNode(Node):
     def __init__(self, comment: str) -> None:
@@ -90,9 +107,6 @@ class ExpressionNode(Node):
     def render(self, ctx: dict) -> str:
         return str(self.eval_expr(self.expr, ctx))
 
-    def __repr__(self) -> str:
-        return '<{}: {}>'.format(self.__class__.__name__, self.expr)
-
 
 class ForNode(Node):
     Loop = namedtuple('Loop', ['length', 'index0', 'index', 'first', 'last'])
@@ -103,14 +117,16 @@ class ForNode(Node):
         self.children = children
 
     def render(self, ctx: dict) -> str:
-        _, var_name, _, expr = self.statement.split()
+        var_name, op, expr = self.statement.partition('in')
+        if not op:
+            raise TemplateSyntaxError('Cannot understand: {!r}'.format(expr))
         values = self.eval_expr(expr, ctx)
         length = len(values)
 
         output = []
         for idx, value in enumerate(values):
             loop = self.Loop(length, idx, idx + 1, idx == 0, idx == length - 1)
-            new_ctx = ChainMap({'loop': loop, var_name: value})
+            new_ctx = ChainMap({'loop': loop, var_name.strip(): value})
             output.append(self.render_children(new_ctx, self.children))
         return ''.join(output)
 
@@ -120,6 +136,17 @@ class IfNode(Node):
         super().__init__()
         self.expr = expr
         self.children = children
+
+    def eval_expr(self, expr: str, ctx: dict) -> Any:
+        ee = super().eval_expr
+        if '==' in expr:
+            lh, _, rh = expr.partition('==')
+            return eq(ee(lh, ctx), ee(rh, ctx))
+        elif '!=' in expr:
+            lh, _, rh = expr.partition('!=')
+            return ne(ee(lh, ctx), ee(rh, ctx))
+        else:
+            return ee(expr, ctx)
 
     def render(self, ctx: dict) -> str:
         matched = self.eval_expr(self.expr, ctx)
@@ -136,7 +163,6 @@ class IfNode(Node):
                     matched = self.eval_expr(child.expr, ctx)
                 elif isinstance(child, ElseNode):
                     matched = True
-
         return self.render_children(ctx, matched_children)
 
 
@@ -266,7 +292,7 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
             reader.consume(2)
             if not contents:
                 raise TemplateSyntaxError("Empty block tag ({% %})")
-            operator, space, suffix = contents.partition(" ")
+            operator, _, suffix = contents.partition(" ")
             # End tag
             if operator.startswith("end"):
                 if not in_block:
@@ -281,7 +307,7 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
                 # parse inner body recursively
                 block_body = parse(reader, operator)
                 if operator == 'for':
-                    block = ForNode(contents, block_body)
+                    block = ForNode(suffix, block_body)
                 else:
                     block = IfNode(suffix, block_body)
                 children.append(block)
@@ -295,7 +321,7 @@ class Template:
 
     def render(self, text: str, **ctx):
         root = RootNode(parse(TextReader(text)))
-        pprint(root.children)
+        # pprint(root.children)
         return root.render(ctx)
 
 
@@ -315,4 +341,5 @@ if __name__ == '__main__':
         'upper': str.upper,
     }
     template = Template()
-    print(template.render(content, **context))
+    result = template.render(content, **context)
+    print(result)
