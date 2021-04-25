@@ -1,26 +1,29 @@
 from pprint import pprint
-from typing import List, Any
+from typing import List, Any, Optional
 from collections import ChainMap, namedtuple
 
 
 class TemplateError(Exception):
-    pass
+    """Base exception class"""
 
 
 class TemplateSyntaxError(TemplateError):
-    pass
+    """Exception of bad template syntax"""
 
 
 class TemplateContextError(TemplateError):
-    pass
+    """Exception about template context """
 
 
 class Node:
     def __init__(self):
-        pass
+        self.children = None
 
     def render(self, ctx: dict) -> str:
         raise NotImplementedError
+
+    def render_children(self, ctx: dict, children: Optional[List['Node']] = None) -> str:
+        return ''.join(child.render(ctx) for child in (children or self.children or []))
 
     def eval_expr(self, expr: str, ctx: dict) -> Any:
         if '|' in expr:
@@ -36,7 +39,7 @@ class Node:
             ep, *attrs = expr.split('.')
             value = ctx.get(ep)
             if not value:
-                raise TemplateSyntaxError(f'Missing key: {ep}')
+                raise TemplateSyntaxError(f'Cannot resolve: "{ep}"')
             for attr in attrs:
                 try:
                     value = getattr(value, attr)
@@ -53,7 +56,7 @@ class RootNode(Node):
         self.children = children
 
     def render(self, ctx: dict) -> str:
-        return ''.join(child.render(ctx) for child in self.children)
+        return self.render_children(ctx)
 
 
 class TextNode(Node):
@@ -89,21 +92,13 @@ class ExpressionNode(Node):
         return '<{}: {}>'.format(self.__class__.__name__, self.expr)
 
 
-class BlockNode(Node):
+class ForNode(Node):
+    Loop = namedtuple('Loop', ['length', 'index0', 'index', 'first', 'last'])
+
     def __init__(self, statement: str, children: List[Node]) -> None:
         super().__init__()
         self.statement = statement
         self.children = children
-
-    def render(self, ctx: dict) -> str:
-        raise NotImplementedError
-
-    def __repr__(self):
-        return '<{}: {}>'.format(self.__class__.__name__, self.statement)
-
-
-class ForNode(BlockNode):
-    Loop = namedtuple('Loop', ['length', 'index0', 'index', 'first', 'last'])
 
     def render(self, ctx: dict) -> str:
         _, var_name, _, expr = self.statement.split()
@@ -114,20 +109,47 @@ class ForNode(BlockNode):
         for idx, value in enumerate(values):
             loop = self.Loop(length, idx, idx + 1, idx == 0, idx == length - 1)
             new_ctx = ChainMap({'loop': loop, var_name: value})
-            output.append(''.join(child.render(new_ctx) for child in self.children))
+            output.append(self.render_children(new_ctx, self.children))
         return ''.join(output)
 
 
-class IfNode(BlockNode):
-    pass
+class IfNode(Node):
+    def __init__(self, expr: str, children: List[Node]) -> None:
+        super().__init__()
+        self.expr = expr
+        self.children = children
+
+    def render(self, ctx: dict) -> str:
+        matched = self.eval_expr(self.expr, ctx)
+        matched_children = []
+
+        for child in self.children:
+            if matched:
+                if isinstance(child, (ElifNode, ElseNode)):
+                    break
+                else:
+                    matched_children.append(child)
+            else:
+                if isinstance(child, ElifNode):
+                    matched = self.eval_expr(child.expr, ctx)
+                elif isinstance(child, ElseNode):
+                    matched = True
+
+        return self.render_children(ctx, matched_children)
 
 
-class ElifNode(BlockNode):
-    pass
+class ElifNode(Node):
+    def __init__(self, expr: str) -> None:
+        super().__init__()
+        self.expr = expr
+
+    def render(self, ctx: dict) -> str:
+        raise NotImplementedError
 
 
-class ElseNode(BlockNode):
-    pass
+class ElseNode(Node):
+    def render(self, ctx: dict) -> str:
+        raise NotImplementedError
 
 
 class TextReader:
@@ -237,13 +259,18 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
                 if not in_block:
                     raise TemplateSyntaxError("Extra {% end %} block")
                 return children
-            elif operator in ("if", 'elif', 'else', "for",):
+            elif operator in ('elif', 'else'):
+                if operator == 'elif':
+                    children.append(ElifNode(suffix))
+                else:
+                    children.append(ElseNode())
+            elif operator in ('if', 'for',):
                 # parse inner body recursively
                 block_body = parse(reader, operator)
                 if operator == 'for':
                     block = ForNode(contents, block_body)
                 else:
-                    block = BlockNode(contents, block_body)
+                    block = IfNode(suffix, block_body)
                 children.append(block)
             else:
                 raise TemplateSyntaxError("Unknown operator: %r" % operator)
@@ -271,7 +298,8 @@ if __name__ == '__main__':
             {'rank': 2, 'title': 'CSAPP'},
             {'rank': 3, 'title': 'SICP'},
             {'rank': 4, 'title': 'UNP'},
-        ]
+        ],
+        'upper': str.upper,
     }
     template = Template()
     print(template.render(content, **context))

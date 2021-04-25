@@ -5,7 +5,13 @@
     <title>mini template</title>
 </head>
 <body>
-    <h1>hello, {{ user }}</h1>
+    <h1>welcome, {{ user | upper }}</h1>
+
+    {% if msg %}
+    <p>{{ msg }}</p>
+    {% else %}
+    <p>Writing a template is fun!</p>
+    {% end %}
 
     {# this is a comment #}
     <ul>
