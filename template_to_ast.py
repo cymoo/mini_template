@@ -1,3 +1,5 @@
+"""A simple template engine which compiles a template to AST."""
+
 from pprint import pprint
 from typing import List, Any, Optional
 from collections import ChainMap, namedtuple
@@ -193,35 +195,46 @@ class TextReader:
         return self.text[self.pos:]
 
 
+def find_curly(reader: TextReader) -> int:
+    # Find the next template directive: {{, {# or {%.
+    curly = 0
+    while True:
+        curly = reader.find("{", curly)
+
+        if curly == -1 or curly + 1 == reader.remaining():
+            return -1
+        # If the first { is not the start of a special token,
+        # start searching from the character after it.
+        if reader[curly + 1] not in ("{", "%", "#"):
+            curly += 1
+            continue
+        # When there are more than 2 { in a row, use the innermost ones.
+        if (
+            curly + 2 < reader.remaining() and
+            reader[curly + 1] == '{' and
+            reader[curly + 2] == '{'
+        ):
+            curly += 1
+            continue
+
+        return curly
+
+
 def parse(reader: TextReader, in_block=None) -> List[Node]:
     children: List[Node] = []
     while True:
-        # Find next template directive
-        curly = 0
-        while True:
-            curly = reader.find("{", curly)
-            if curly == -1 or curly + 1 == reader.remaining():
-                # EOF
-                if in_block:
-                    raise TemplateSyntaxError("Missing {%% end %%} block for %s" % in_block)
+        curly = find_curly(reader)
+        # If it's end of file
+        if curly == -1:
+            if in_block:
+                raise TemplateSyntaxError("Missing {%% end %%} block for %s" % in_block)
+            else:
+                # Append the rest text
                 children.append(TextNode(reader.consume()))
                 return children
-            # If the first curly brace is not the start of a special token,
-            # start searching from the character after it
-            if reader[curly + 1] not in ("{", "%", "#"):
-                curly += 1
-                continue
-            # When there are more than 2 curlies in a row, use the
-            # innermost ones.  This is useful when generating languages
-            # like latex where curlies are also meaningful
-            if (curly + 2 < reader.remaining() and
-                    reader[curly + 1] == '{' and reader[curly + 2] == '{'):
-                curly += 1
-                continue
-            break
-
-        # Append any text before the special token
-        if curly > 0:
+        # If a template directive was found
+        else:
+            # Append any text before the special token
             children.append(TextNode(reader.consume(curly)))
 
         start_brace = reader.consume(2)

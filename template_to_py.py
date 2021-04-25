@@ -1,4 +1,4 @@
-"""A simple toy template engine"""
+"""A simple template engine which compiles a template to Python."""
 
 import re
 from utils import html_escape, DotSon
