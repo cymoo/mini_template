@@ -35,27 +35,26 @@ class CodeWriter:
 class Template:
     global_ctx = {'escape': html_escape}
 
-    def __init__(self,
-                 escape_html: bool = True,
-                 dot_notation: bool = True,
-                 **options) -> None:
-        self.escape_html = escape_html
-        self.dot_notation = dot_notation
+    def __init__(self, **options) -> None:
         self.options = options
 
+    @classmethod
+    def set_global_ctx(cls, ctx: dict) -> None:
+        cls.global_ctx.update(ctx)
+
     def render(self, text: str, **ctx):
-        code = self.compile(text, self.escape_html)
+        # NOTE: We should compile once for a template and cache the compiled code somewhere
+        code = compile(str(self.parse(text)), '<string>', 'exec')
+
         namespace = self.global_ctx.copy()
         namespace.update(ctx)
+        namespace = {key: DotSon(value) for key, value in namespace.items()}
 
-        if self.dot_notation:
-            namespace = {key: DotSon(value) for key, value in namespace.items()}
-
-        exec(str(code), namespace)
+        exec(code, namespace)
         return namespace['render']()
 
     @staticmethod
-    def compile(text: str, escape_html: bool = True) -> 'CodeWriter':
+    def parse(text: str) -> 'CodeWriter':
         code = CodeWriter()
         buffer = []
 
@@ -73,10 +72,7 @@ class Template:
                 continue
             elif fragment.startswith('{{'):
                 expr = fragment[2:-2].strip()
-                if escape_html:
-                    buffer.append(f'escape(str({expr}))')
-                else:
-                    buffer.append(f'str({expr})')
+                buffer.append(f'str({expr})')
             elif fragment.startswith('{%'):
                 flush_buffer()
 

@@ -1,10 +1,11 @@
 """A simple template engine which compiles a template to AST."""
-
-from pprint import pprint
-from typing import List, Any, Optional
+import os
 from collections import ChainMap, namedtuple
 from operator import eq, ne
 from string import digits
+from typing import List, Any, Optional, Sequence, MutableMapping
+
+from utils import html_escape
 
 
 class TemplateError(Exception):
@@ -23,15 +24,15 @@ class Node:
     def __init__(self) -> None:
         self.children = None
 
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         raise NotImplementedError
 
-    def render_children(self, ctx: dict, children: Optional[List['Node']] = None) -> str:
+    def render_children(self, ctx: MutableMapping, children: Optional[List['Node']] = None) -> str:
         if children is None:
             children = self.children
         return ''.join(child.render(ctx) for child in children)
 
-    def eval_expr(self, expr: str, ctx: dict) -> Any:
+    def eval_expr(self, expr: str, ctx: MutableMapping) -> Any:
         expr = expr.strip()
 
         # If an expression begins with digits, convert it to int or float.
@@ -42,7 +43,7 @@ class Node:
                 else:
                     return int(expr)
             except ValueError:
-                raise TemplateSyntaxError(f'Cannot resolve: "{expr}"')
+                raise TemplateSyntaxError('Invalid syntax {!r}'.format(expr))
 
         # If an expression begins with ' or ", it should be a str.
         if expr[0] in ('"', "'"):
@@ -54,19 +55,20 @@ class Node:
             for pipe in map(str.strip, pipes):
                 func = ctx.get(pipe)
                 if not func:
-                    raise TemplateContextError(f'Missing pipe function: {pipe}')
+                    raise TemplateContextError('Cannot resolve {!r} in {!r}'.format(pipe, expr))
                 value = func(value)
             return value
         elif '.' in expr:
             ep, *attrs = expr.split('.')
-            value = ctx.get(ep)
-            if not value:
-                raise TemplateContextError(f'Cannot resolve: "{ep}"')
+            value = ctx[ep]
             for attr in attrs:
                 try:
                     value = getattr(value, attr)
                 except AttributeError:
-                    value = value[attr]
+                    if isinstance(value, Sequence) and attr.isdigit():
+                        value = value[int(attr)]
+                    else:
+                        value = value[attr]
             return value
         else:
             return ctx[expr]
@@ -77,7 +79,7 @@ class RootNode(Node):
         super().__init__()
         self.children = children
 
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         return self.render_children(ctx)
 
 
@@ -86,7 +88,7 @@ class TextNode(Node):
         super().__init__()
         self.text = text
 
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         return self.text
 
 
@@ -95,7 +97,7 @@ class CommentNode(Node):
         super().__init__()
         self.comment = comment
 
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         return ''
 
 
@@ -104,7 +106,7 @@ class ExpressionNode(Node):
         super().__init__()
         self.expr = expr
 
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         return str(self.eval_expr(self.expr, ctx))
 
 
@@ -116,17 +118,17 @@ class ForNode(Node):
         self.statement = statement
         self.children = children
 
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         var_name, op, expr = self.statement.partition('in')
-        if not op:
-            raise TemplateSyntaxError('Cannot understand: {!r}'.format(expr))
+        if op != 'in':
+            raise TemplateSyntaxError('Cannot understand {!r}'.format(self.statement))
         values = self.eval_expr(expr, ctx)
         length = len(values)
 
         output = []
         for idx, value in enumerate(values):
             loop = self.Loop(length, idx, idx + 1, idx == 0, idx == length - 1)
-            new_ctx = ChainMap({'loop': loop, var_name.strip(): value})
+            new_ctx = ChainMap({'loop': loop, var_name.strip(): value}, ctx)
             output.append(self.render_children(new_ctx, self.children))
         return ''.join(output)
 
@@ -137,7 +139,7 @@ class IfNode(Node):
         self.expr = expr
         self.children = children
 
-    def eval_expr(self, expr: str, ctx: dict) -> Any:
+    def eval_expr(self, expr: str, ctx: MutableMapping) -> Any:
         ee = super().eval_expr
         if '==' in expr:
             lh, _, rh = expr.partition('==')
@@ -148,7 +150,7 @@ class IfNode(Node):
         else:
             return ee(expr, ctx)
 
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         matched = self.eval_expr(self.expr, ctx)
         matched_children = []
 
@@ -171,12 +173,12 @@ class ElifNode(Node):
         super().__init__()
         self.expr = expr
 
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         raise NotImplementedError
 
 
 class ElseNode(Node):
-    def render(self, ctx: dict) -> str:
+    def render(self, ctx: MutableMapping) -> str:
         raise NotImplementedError
 
 
@@ -225,13 +227,13 @@ def find_curly(reader: TextReader) -> int:
     # Find the next template directive: {{, {# or {%.
     curly = 0
     while True:
-        curly = reader.find("{", curly)
+        curly = reader.find('{', curly)
 
         if curly == -1 or curly + 1 == reader.remaining():
             return -1
         # If the first { is not the start of a special token,
         # start searching from the character after it.
-        if reader[curly + 1] not in ("{", "%", "#"):
+        if reader[curly + 1] not in ('{', '%', '#'):
             curly += 1
             continue
         # When there are more than 2 { in a row, use the innermost ones.
@@ -253,7 +255,7 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
         # If it's end of file
         if curly == -1:
             if in_block:
-                raise TemplateSyntaxError("Missing {%% end %%} block for %s" % in_block)
+                raise TemplateSyntaxError("Missing block tag '{{% end %}}' for {!r}".format(in_block))
             else:
                 # Append the rest text
                 children.append(TextNode(reader.consume()))
@@ -263,83 +265,84 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
             # Append any text before the special token
             children.append(TextNode(reader.consume(curly)))
 
-        start_brace = reader.consume(2)
+        directive = reader.consume(2)
 
         # Expression
-        if start_brace == "{{":
-            end = reader.find("}}")
-            if end == -1 or reader.find("\n", 0, end) != -1:
-                raise TemplateSyntaxError("Missing end tag for expression }}")
+        if directive == '{{':
+            end = reader.find('}}')
+            if end == -1 or reader.find('\n', 0, end) != -1:
+                raise TemplateSyntaxError("Missing end tag '}}'")
+
             contents = reader.consume(end).strip()
-            reader.consume(2)
             if not contents:
-                raise TemplateSyntaxError("Empty expression")
+                raise TemplateSyntaxError('Empty expression')
+
+            reader.consume(2)
             children.append(ExpressionNode(contents))
         # Comment
-        elif start_brace == "{#":
-            end = reader.find("#}")
-            if end == -1 or reader.find("\n", 0, end) != -1:
-                raise TemplateSyntaxError("Missing end tag for comment }}")
+        elif directive == '{#':
+            end = reader.find('#}')
+            if end == -1 or reader.find('\n', 0, end) != -1:
+                raise TemplateSyntaxError("Missing end tag '#}'")
+
             contents = reader.consume(end).strip()
             reader.consume(2)
             children.append(CommentNode(contents))
         # Block
-        elif start_brace == "{%":
-            end = reader.find("%}")
-            if end == -1 or reader.find("\n", 0, end) != -1:
-                raise TemplateSyntaxError("Missing end tag for block %}")
+        elif directive == '{%':
+            end = reader.find('%}')
+            if end == -1 or reader.find('\n', 0, end) != -1:
+                raise TemplateSyntaxError("Missing end tag '%}'")
+
             contents = reader.consume(end).strip()
-            reader.consume(2)
             if not contents:
-                raise TemplateSyntaxError("Empty block tag ({% %})")
-            operator, _, suffix = contents.partition(" ")
+                raise TemplateSyntaxError("Empty block tag '{% %}'")
+
+            reader.consume(2)
+
+            operator, _, suffix = contents.partition(' ')
             # End tag
-            if operator.startswith("end"):
+            if operator.startswith('end'):
                 if not in_block:
-                    raise TemplateSyntaxError("Extra {% end %} block")
+                    raise TemplateSyntaxError("Extra block tag '{% end %}'")
                 return children
             elif operator in ('elif', 'else'):
-                if operator == 'elif':
-                    children.append(ElifNode(suffix))
-                else:
-                    children.append(ElseNode())
+                node = ElifNode(suffix) if operator == 'elif' else ElseNode()
+                children.append(node)
             elif operator in ('if', 'for',):
                 # parse inner body recursively
                 block_body = parse(reader, operator)
-                if operator == 'for':
-                    block = ForNode(suffix, block_body)
-                else:
-                    block = IfNode(suffix, block_body)
-                children.append(block)
+                node_cls = ForNode if operator == 'for' else IfNode
+                children.append(node_cls(suffix, block_body))
             else:
-                raise TemplateSyntaxError("Unknown operator: %r" % operator)
+                raise TemplateSyntaxError('Unknown operator {!r}'.format(operator))
 
 
 class Template:
-    def __init__(self, **options):
+    global_ctx = {'escape': html_escape}
+    cache = {}
+
+    def __init__(self, template_root: Optional[str] = None, **options) -> None:
+        self.template_root = template_root
         self.options = options
 
-    def render(self, text: str, **ctx):
-        root = RootNode(parse(TextReader(text)))
-        # pprint(root.children)
-        return root.render(ctx)
+    def render(self, filename: str, **ctx) -> str:
+        if self.template_root:
+            filename = os.path.join(self.template_root, filename)
 
+        root_node = self.cache.get(filename)
+        if root_node is None:
+            with open(filename, 'rt') as fp:
+                text = fp.read()
+            root_node = RootNode(parse(TextReader(text)))
+            self.cache[filename] = root_node
 
-if __name__ == '__main__':
-    with open('./example1.html', 'rt') as fp:
-        content = fp.read()
+        return root_node.render(ChainMap(ctx, self.global_ctx))
 
-    context = {
-        'user': 'neo',
-        'msg': 'Keep calm and carry on!',
-        'books': [
-            {'rank': 1, 'title': 'APUE'},
-            {'rank': 2, 'title': 'CSAPP'},
-            {'rank': 3, 'title': 'SICP'},
-            {'rank': 4, 'title': 'UNP'},
-        ],
-        'upper': str.upper,
-    }
-    template = Template()
-    result = template.render(content, **context)
-    print(result)
+    def render_str(self, text: str, **ctx) -> str:
+        root_node = RootNode(parse(TextReader(text)))
+        return root_node.render(ChainMap(ctx, self.global_ctx))
+
+    @classmethod
+    def update_global_ctx(cls, ctx: MutableMapping) -> None:
+        cls.global_ctx.update(ctx)

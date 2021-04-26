@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>mini template</title>
+</head>
+<body>
+    <h1>Welcome, {{ user.name }}!</h1>
+
+    {# It' a comment text, and will not be rendered. #}
+
+    {% if msg %}
+    <h2>{{ msg }}</h2>
+    {% else %}
+    <h2>Writing a template is easy!</h2>
+    {% end %}
+
+    <h3>Some books I loved: </h3>
+    <ul>
+    {% for book in books %}
+        <li>
+            <span>{{ loop.index }}: </span>
+            <span>{{ book.author }} - {{ book.title }}</span>
+        </li>
+    {% end %}
+    </ul>
+
+    <h3>The following text will be escaped:</h3>
+    <div>{{ html_content | escape }}</div>
+</body>
+</html>
