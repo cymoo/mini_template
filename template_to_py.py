@@ -39,7 +39,7 @@ class Template:
         self.options = options
 
     @classmethod
-    def set_global_ctx(cls, ctx: dict) -> None:
+    def update_global_ctx(cls, ctx: dict) -> None:
         cls.global_ctx.update(ctx)
 
     def render(self, text: str, **ctx):

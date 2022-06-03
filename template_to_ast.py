@@ -22,6 +22,7 @@ class TemplateContextError(TemplateError):
 
 class Node:
     def __init__(self) -> None:
+        self.text = ''
         self.children = None
 
     def render(self, ctx: MutableMapping) -> str:
@@ -93,35 +94,35 @@ class TextNode(Node):
 
 
 class CommentNode(Node):
-    def __init__(self, comment: str) -> None:
+    def __init__(self, text: str) -> None:
         super().__init__()
-        self.comment = comment
+        self.text = text
 
     def render(self, ctx: MutableMapping) -> str:
         return ''
 
 
 class ExpressionNode(Node):
-    def __init__(self, expr: str) -> None:
+    def __init__(self, text: str) -> None:
         super().__init__()
-        self.expr = expr
+        self.text = text
 
     def render(self, ctx: MutableMapping) -> str:
-        return str(self.eval_expr(self.expr, ctx))
+        return str(self.eval_expr(self.text, ctx))
 
 
 class ForNode(Node):
     Loop = namedtuple('Loop', ['length', 'index0', 'index', 'first', 'last'])
 
-    def __init__(self, statement: str, children: List[Node]) -> None:
+    def __init__(self, text: str, children: List[Node]) -> None:
         super().__init__()
-        self.statement = statement
+        self.text = text
         self.children = children
 
     def render(self, ctx: MutableMapping) -> str:
-        var_name, op, expr = self.statement.partition('in')
+        var_name, op, expr = self.text.partition('in')
         if op != 'in':
-            raise TemplateSyntaxError('Cannot understand {!r}'.format(self.statement))
+            raise TemplateSyntaxError('Cannot understand {!r}'.format(self.text))
         values = self.eval_expr(expr, ctx)
         length = len(values)
 
@@ -134,9 +135,9 @@ class ForNode(Node):
 
 
 class IfNode(Node):
-    def __init__(self, expr: str, children: List[Node]) -> None:
+    def __init__(self, text: str, children: List[Node]) -> None:
         super().__init__()
-        self.expr = expr
+        self.text = text
         self.children = children
 
     def eval_expr(self, expr: str, ctx: MutableMapping) -> Any:
@@ -151,7 +152,7 @@ class IfNode(Node):
             return ee(expr, ctx)
 
     def render(self, ctx: MutableMapping) -> str:
-        matched = self.eval_expr(self.expr, ctx)
+        matched = self.eval_expr(self.text, ctx)
         matched_children = []
 
         for child in self.children:
@@ -162,16 +163,16 @@ class IfNode(Node):
                     matched_children.append(child)
             else:
                 if isinstance(child, ElifNode):
-                    matched = self.eval_expr(child.expr, ctx)
+                    matched = self.eval_expr(child.text, ctx)
                 elif isinstance(child, ElseNode):
                     matched = True
         return self.render_children(ctx, matched_children)
 
 
 class ElifNode(Node):
-    def __init__(self, expr: str) -> None:
+    def __init__(self, text: str) -> None:
         super().__init__()
-        self.expr = expr
+        self.text = text
 
     def render(self, ctx: MutableMapping) -> str:
         raise NotImplementedError
