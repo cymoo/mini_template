@@ -1,8 +1,8 @@
 """A simple template engine which compiles a template to AST."""
+import ast
 import os
 from collections import ChainMap, namedtuple
-from operator import eq, ne
-from string import digits
+from operator import eq, ne, ge, gt, le, lt
 from typing import List, Any, Optional, Sequence, MutableMapping
 
 from utils import html_escape
@@ -36,43 +36,48 @@ class Node:
     def eval_expr(self, expr: str, ctx: MutableMapping) -> Any:
         expr = expr.strip()
 
-        # If an expression begins with digits, convert it to int or float.
-        if expr[0] in digits:
-            try:
-                if '.' in expr:
-                    return float(expr)
-                else:
-                    return int(expr)
-            except ValueError:
-                raise TemplateSyntaxError('Invalid syntax {!r}'.format(expr))
+        # # If an expression begins with digits, convert it to int or float.
+        # if expr[0] in digits:
+        #     try:
+        #         if '.' in expr:
+        #             return float(expr)
+        #         else:
+        #             return int(expr)
+        #     except ValueError:
+        #         raise TemplateSyntaxError('Invalid syntax {!r}'.format(expr))
 
-        # If an expression begins with ' or ", it should be a str.
-        if expr[0] in ('"', "'"):
-            return expr[1:-1]
+        # # If an expression begins with ' or ", it should be a str.
+        # if expr[0] in ('"', "'"):
+        #     return expr[1:-1]
 
-        if '|' in expr:
-            ep, *pipes = expr.split('|')
-            value = self.eval_expr(ep, ctx)
-            for pipe in map(str.strip, pipes):
-                func = ctx.get(pipe)
-                if not func:
-                    raise TemplateContextError('Cannot resolve {!r} in {!r}'.format(pipe, expr))
-                value = func(value)
-            return value
-        elif '.' in expr:
-            ep, *attrs = expr.split('.')
-            value = ctx[ep]
-            for attr in attrs:
-                try:
-                    value = getattr(value, attr)
-                except AttributeError:
-                    if isinstance(value, Sequence) and attr.isdigit():
-                        value = value[int(attr)]
-                    else:
-                        value = value[attr]
-            return value
-        else:
-            return ctx[expr]
+        try:
+            return ast.literal_eval(expr)
+        except SyntaxError:
+            raise TemplateSyntaxError('Cannot understand {!r}'.format(self.text))
+        except ValueError:
+            if '|' in expr:
+                ep, *pipes = expr.split('|')
+                value = self.eval_expr(ep, ctx)
+                for pipe in map(str.strip, pipes):
+                    func = ctx.get(pipe)
+                    if not func:
+                        raise TemplateContextError('Cannot resolve {!r} in {!r}'.format(pipe, expr))
+                    value = func(value)
+                return value
+            elif '.' in expr:
+                ep, *attrs = expr.split('.')
+                value = ctx[ep]
+                for attr in attrs:
+                    try:
+                        value = getattr(value, attr)
+                    except AttributeError:
+                        if isinstance(value, Sequence) and attr.isdigit():
+                            value = value[int(attr)]
+                        else:
+                            value = value[attr]
+                return value
+            else:
+                return ctx[expr]
 
 
 class RootNode(Node):
@@ -102,7 +107,7 @@ class CommentNode(Node):
         return ''
 
 
-class ExpressionNode(Node):
+class ExprNode(Node):
     def __init__(self, text: str) -> None:
         super().__init__()
         self.text = text
@@ -148,6 +153,18 @@ class IfNode(Node):
         elif '!=' in expr:
             lh, _, rh = expr.partition('!=')
             return ne(ee(lh, ctx), ee(rh, ctx))
+        elif '>' in expr:
+            lh, _, rh = expr.partition('>')
+            return gt(ee(lh, ctx), ee(rh, ctx))
+        elif '>=' in expr:
+            lh, _, rh = expr.partition('>=')
+            return ge(ee(lh, ctx), ee(rh, ctx))
+        elif '<' in expr:
+            lh, _, rh = expr.partition('<')
+            return lt(ee(lh, ctx), ee(rh, ctx))
+        elif '<=' in expr:
+            lh, _, rh = expr.partition('<=')
+            return le(ee(lh, ctx), ee(rh, ctx))
         else:
             return ee(expr, ctx)
 
@@ -184,6 +201,15 @@ class ElseNode(Node):
 
 
 class TextReader:
+    """A helper class to read text.
+    >>> reader = TextReader('hi {{ user }}.')
+    >>> reader.find('{')
+    3
+    >>> reader.consume(3)
+    'hi '
+    >>> reader.remaining()
+    11
+    """
     def __init__(self, text: str) -> None:
         self.text = text
         self.pos = 0
@@ -225,7 +251,15 @@ class TextReader:
 
 
 def find_curly(reader: TextReader) -> int:
-    # Find the next template directive: {{, {# or {%.
+    """Find the valid next template directive: {{, {# or {%.
+    >>> find_curly(TextReader('hi { name }'))
+    -1
+    >>> find_curly(TextReader('hi {{ name }}'))
+    3
+    >>> find_curly(TextReader('hi {{{ name }}'))
+    4
+    """
+
     curly = 0
     while True:
         curly = reader.find('{', curly)
@@ -279,7 +313,7 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
                 raise TemplateSyntaxError('Empty expression')
 
             reader.consume(2)
-            children.append(ExpressionNode(contents))
+            children.append(ExprNode(contents))
         # Comment
         elif directive == '{#':
             end = reader.find('#}')
@@ -310,7 +344,7 @@ def parse(reader: TextReader, in_block=None) -> List[Node]:
             elif operator in ('elif', 'else'):
                 node = ElifNode(suffix) if operator == 'elif' else ElseNode()
                 children.append(node)
-            elif operator in ('if', 'for',):
+            elif operator in ('if', 'for'):
                 # parse inner body recursively
                 block_body = parse(reader, operator)
                 node_cls = ForNode if operator == 'for' else IfNode
@@ -342,6 +376,7 @@ class Template:
 
     def render_str(self, text: str, **ctx) -> str:
         root_node = RootNode(parse(TextReader(text)))
+        print(root_node)
         return root_node.render(ChainMap(ctx, self.global_ctx))
 
     @classmethod

@@ -39,5 +39,41 @@ def test_ast_template():
     print(result)
 
 
+def test_ast_template1():
+    tpl_str = """
+    I am {{ name }}.
+    
+    {% if color == 'red' %} 
+        Free your mind!
+    {% else %}
+        The story ends.
+    {% endif %}
+    
+    {% for msg in messages %}
+        {{ msg }}
+    {% endfor %} 
+    
+    {% for item in ['hello', 'world'] %}
+        {{loop.index}} - {{ item }}
+    {% endfor %} 
+    
+    
+    {% for item in [{'a': 1}, {'a': 3}] %}
+        {{ item.a }}
+    {% endfor %}
+    
+    obj: {{ obj.a.b }}
+    """
+    template = AstTemplate()
+    result = template.render_str(
+        tpl_str,
+        name='Neo',
+        color='red',
+        messages=['Wake up, Neo...', 'The matrix has you...', 'Follow the white rabbit.'],
+        obj={'a': {'b': 1}}
+    )
+    print(result)
+
+
 if __name__ == '__main__':
-    test_ast_template()
+    test_ast_template1()
