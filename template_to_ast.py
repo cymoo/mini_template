@@ -166,7 +166,10 @@ class IfNode(Node):
             lh, _, rh = expr.partition('<=')
             return le(ee(lh, ctx), ee(rh, ctx))
         else:
-            return ee(expr, ctx)
+            if expr.startswith('!'):
+                return not ee(expr[1:], ctx)
+            else:
+                return ee(expr, ctx)
 
     def render(self, ctx: MutableMapping) -> str:
         matched = self.eval_expr(self.text, ctx)
@@ -202,13 +205,17 @@ class ElseNode(Node):
 
 class TextReader:
     """A helper class to read text.
-    >>> reader = TextReader('hi {{ user }}.')
-    >>> reader.find('{')
-    3
-    >>> reader.consume(3)
+    >>> reader = TextReader('hi {{ user }}')
+    >>> start = reader.find('{{')
+    >>> reader.consume(start)
     'hi '
+    >>> reader.consume(2)
+    '{{'
+    >>> end = reader.find('}}')
+    >>> reader.consume(end)
+    ' user '
     >>> reader.remaining()
-    11
+    2
     """
     def __init__(self, text: str) -> None:
         self.text = text

@@ -62,7 +62,16 @@ def test_ast_template1():
         {{ item.a }}
     {% endfor %}
     
+    {% for item in ['hello', 'world'] %}
+        {{ loop.index }}: {{ item }}
+        {% if loop.last %} ... {% endif %}
+    {% endfor %}
+    
     obj: {{ obj.a.b }}
+    
+    {% if !color %}
+       ...
+    {% endif %}
     """
     template = AstTemplate()
     result = template.render_str(
